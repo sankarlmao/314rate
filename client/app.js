@@ -273,8 +273,8 @@ function renderGames(games, pagination) {
     <div class="game-card" data-id="${game.id}" data-source="${game.source}" style="animation-delay:${i * 0.04}s">
       <div class="card-image">
         ${imgSrc
-          ? `<img src="${imgSrc}" alt="${escHtml(title)}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=placeholder-img>🎮</div>'">`
-          : '<div class="placeholder-img">🎮</div>'
+          ? `<img src="${imgSrc}" alt="${escHtml(title)}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=placeholder-img>[IMAGE]</div>'">`
+          : '<div class="placeholder-img">[IMAGE]</div>'
         }
         <div class="card-badges">
           ${game.isOnline ? '<span class="badge badge-online">Online</span>' : ''}
@@ -310,25 +310,56 @@ function renderGames(games, pagination) {
   }
 }
 
-// === Game Detail Modal ===
+// === Game Detail Modal & Auto Download ===
 async function openGameDetail(id, source) {
   els.modal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  els.modalBody.innerHTML = '<div class="modal-loading"><div class="loader" style="width:32px;height:32px"><div class="loader-ring"></div></div>Loading...</div>';
+  els.modalBody.innerHTML = `
+    <div class="modal-loading">
+      <div class="loader" style="width:32px;height:32px"><div class="loader-ring"></div></div>
+      <div style="margin-top:16px; letter-spacing:1px; text-transform:uppercase; font-weight:700;">
+        INITIATING DOWNLOAD SEQUENCE...
+      </div>
+    </div>`;
 
   try {
     let data;
     if (source === 'cs.rin.ru') {
       const res = await fetch(`${API_BASE}/csrin/thread/${id}`);
       data = await res.json();
-      renderCsRinDetail(data);
     } else {
       const res = await fetch(`${API_BASE}/onlinefix/game/${id}`);
       data = await res.json();
-      renderOnlineFixDetail(data);
     }
+    
+    const bestDl = getBestDownload(data.downloadLinks);
+    
+    if (bestDl && bestDl.url) {
+      // Display transferring notice
+      els.modalBody.innerHTML = `
+        <div class="modal-loading">
+          <div style="color:var(--accent); font-weight:800; letter-spacing:1px; margin-bottom: 10px;">SUCCESS</div>
+          <div style="text-transform:uppercase; font-size:13px;">TRANSFERRING COMMAND TO SYSTEM...</div>
+        </div>`;
+        
+      // Trigger immediate location jump!
+      setTimeout(() => {
+         window.location.href = bestDl.url;
+      }, 500);
+      
+      // After a short delay, update the modal state to standard content just in case they want other details
+      setTimeout(() => {
+         if (source === 'cs.rin.ru') renderCsRinDetail(data);
+         else renderOnlineFixDetail(data);
+      }, 2000);
+    } else {
+      // No download found instantly? Fallback directly to detail render!
+      if (source === 'cs.rin.ru') renderCsRinDetail(data);
+      else renderOnlineFixDetail(data);
+    }
+
   } catch (err) {
-    els.modalBody.innerHTML = `<div class="error-state"><div class="error-icon">⚠️</div><h3>Failed to load</h3><p>${escHtml(err.message)}</p></div>`;
+    els.modalBody.innerHTML = `<div class="error-state"><div class="error-icon">![ERR]</div><h3>Failed to load</h3><p>${escHtml(err.message)}</p></div>`;
   }
 }
 
@@ -343,7 +374,7 @@ function renderOnlineFixDetail(game) {
   const dlHtml = game.downloadLinks?.length
     ? game.downloadLinks.map(dl => `
       <a href="${escHtml(dl.url)}" target="_blank" rel="noopener" class="download-link" onclick="event.stopPropagation()">
-        <div class="dl-icon ${dl.type}">${dl.type === 'magnet' ? '🧲' : dl.type === 'torrent' ? '📦' : '⬇️'}</div>
+        <div class="dl-icon ${dl.type}">[${dl.type === 'magnet' ? 'MAG' : dl.type === 'torrent' ? 'TOR' : 'DL'}]</div>
         <div class="dl-info">
           <div class="dl-name">${escHtml(dl.text)}</div>
           <div class="dl-type">${dl.type.toUpperCase()}</div>
@@ -366,7 +397,7 @@ function renderOnlineFixDetail(game) {
     ${bestDl ? `
       <div class="primary-action">
          <a href="${escHtml(bestDl.url)}" target="_blank" rel="noopener" class="btn-mega-download">
-             <span class="mega-icon">${bestDl.type === 'magnet' ? '🧲' : '🚀'}</span>
+             <span class="mega-icon">[LINK]</span>
              <span class="mega-text">INSTANT DOWNLOAD</span>
          </a>
       </div>
@@ -387,7 +418,7 @@ function renderCsRinDetail(thread) {
   const dlHtml = thread.downloadLinks?.length
     ? thread.downloadLinks.map(dl => `
       <a href="${escHtml(dl.url)}" target="_blank" rel="noopener" class="download-link" onclick="event.stopPropagation()">
-        <div class="dl-icon ${dl.type}">${dl.type === 'magnet' ? '🧲' : dl.type === 'torrent' ? '📦' : '⬇️'}</div>
+        <div class="dl-icon ${dl.type}">[${dl.type === 'magnet' ? 'MAG' : dl.type === 'torrent' ? 'TOR' : 'DL'}]</div>
         <div class="dl-info">
           <div class="dl-name">${escHtml(dl.text)}</div>
           <div class="dl-type">${dl.type.toUpperCase()}</div>
@@ -409,7 +440,7 @@ function renderCsRinDetail(thread) {
     ${bestDl ? `
       <div class="primary-action">
          <a href="${escHtml(bestDl.url)}" target="_blank" rel="noopener" class="btn-mega-download">
-             <span class="mega-icon">${bestDl.type === 'magnet' ? '🧲' : '🚀'}</span>
+             <span class="mega-icon">[LINK]</span>
              <span class="mega-text">INSTANT DOWNLOAD</span>
          </a>
       </div>
@@ -420,7 +451,7 @@ function renderCsRinDetail(thread) {
       <h4>Extracted Links (${thread.downloadLinks?.length || 0})</h4>
       <div class="download-list">${dlHtml}</div>
     </div>
-    ${thread.error ? `<div class="detail-section"><p class="no-downloads">⚠️ ${escHtml(thread.error)}</p></div>` : ''}
+    ${thread.error ? `<div class="detail-section"><p class="no-downloads">[ERR] ${escHtml(thread.error)}</p></div>` : ''}
   `;
 }
 
