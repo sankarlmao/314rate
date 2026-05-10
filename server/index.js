@@ -4,7 +4,7 @@ const path = require('path');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 const { scrapeOnlineFix, scrapeOnlineFixDetail, scrapeOnlineFixCategories } = require('./scrapers/onlinefix');
-const { scrapeCsRin, scrapeCsRinThread } = require('./scrapers/csrin');
+const { scrapeCsRin, scrapeCsRinThread, scrapeCsRinFeed } = require('./scrapers/csrin');
 const NodeCache = require('node-cache');
 
 const app = express();
@@ -128,6 +128,23 @@ app.get('/api/onlinefix/categories', async (req, res) => {
 });
 
 // --- CS.RIN.RU Routes ---
+
+// Get cs.rin.ru default generic feed
+app.get('/api/csrin/games', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const cacheKey = `csrin_feed_${page}`;
+    let data = listCache.get(cacheKey);
+    if (!data) {
+      data = await scrapeCsRinFeed(page);
+      listCache.set(cacheKey, data);
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('CS.RIN feed error:', err.message);
+    res.status(500).json({ error: 'Failed to retrieve feed', details: err.message });
+  }
+});
 
 // Search cs.rin.ru forum
 app.get('/api/csrin/search', async (req, res) => {

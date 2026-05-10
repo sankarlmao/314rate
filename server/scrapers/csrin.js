@@ -107,6 +107,84 @@ function sanitizeHtml($) {
 }
 
 /**
+ * Core generic list mapping from HTML row block elements to standardized objects
+ */
+function parseThreadRows($) {
+  const threads = [];
+  $('li.row, tr.row1, tr.row2, .search.post, dl.icon').each((_, element) => {
+    const el = $(element);
+    const titleEl = el.find('a.topictitle, .topictitle a, a[href*="viewtopic"]').first();
+    const title = titleEl.text().trim();
+    const link = titleEl.attr('href') || '';
+    
+    if (!title || !link || title.length < 3) return;
+    if (title.toLowerCase().includes('privacy policy') || title.toLowerCase().includes('recommended download')) return; // filter stickies
+
+    const tidMatch = link.match(/[?&]t=(\d+)/);
+    const threadId = tidMatch ? tidMatch[1] : '';
+    if (!threadId) return;
+
+    const author = el.find('.author a, .username').first().text().trim() || 'User';
+    const replies = el.find('.posts, dd.posts, .topic-posts').first().text().replace(/[^0-9]/g, '') || '0';
+    const views = el.find('.views, dd.views').first().text().replace(/[^0-9]/g, '') || '0';
+    
+    let cleanUrl = link.startsWith('http') ? link : `${BASE_URL}/${link.replace('./', '')}`;
+    cleanUrl = cleanUrl.replace(/[?&]sid=[a-f0-9]{32}/, '');
+
+    threads.push({
+      id: threadId,
+      title,
+      link: cleanUrl,
+      author,
+      replies: parseInt(replies) || 0,
+      views: parseInt(views) || 0,
+      lastPost: '',
+      source: 'cs.rin.ru'
+    });
+  });
+  return threads;
+}
+
+/**
+ * Public routine to fetch active feed when not searching
+ */
+async function scrapeCsRinFeed(page = 1) {
+  await ensureSession();
+  try {
+    const startIdx = (page - 1) * 25;
+    // Steam Underground main forum ID=10
+    const feedUrl = `${BASE_URL}/viewforum.php?f=10&start=${startIdx}`;
+    const body = nativeFetch(feedUrl);
+    
+    const $ = cheerio.load(body);
+    sanitizeHtml($);
+    
+    let threads = parseThreadRows($);
+    
+    // Fallback parse just in case
+    if (threads.length === 0) {
+      $('a[href*="viewtopic"]').each((_, element) => {
+         const title = $(element).text().trim();
+         const link = $(element).attr('href') || '';
+         const tidMatch = link.match(/[?&]t=(\d+)/);
+         if (tidMatch && title.length > 3) {
+           threads.push({ id: tidMatch[1], title, link: `${BASE_URL}/${link}`, source: 'cs.rin.ru' });
+         }
+      });
+    }
+
+    return {
+      threads: threads.slice(0, 40),
+      pagination: { currentPage: page, hasNext: true, hasPrev: page > 1 },
+      source: 'cs.rin.ru'
+    };
+  } catch(err) {
+    console.error('[CSRIN Feed Error]:', err.message);
+    return { threads: [], source: 'cs.rin.ru' };
+  }
+}
+
+/**
  * Logic for list aggregation and processing via raw search execution
  */
 async function scrapeCsRin(query, page = 1) {
@@ -132,40 +210,9 @@ async function scrapeCsRin(query, page = 1) {
     const $ = cheerio.load(responseBody);
     sanitizeHtml($);
 
-    const threads = [];
+    let threads = parseThreadRows($);
 
-    $('li.row, tr.row1, tr.row2, .search.post').each((_, element) => {
-      const el = $(element);
-      const titleEl = el.find('a.topictitle, .topictitle a, a[href*="viewtopic"]').first();
-      const title = titleEl.text().trim();
-      const link = titleEl.attr('href') || '';
-      
-      if (!title || !link) return;
-
-      const tidMatch = link.match(/[?&]t=(\d+)/);
-      const threadId = tidMatch ? tidMatch[1] : '';
-      if (!threadId) return;
-
-      const author = el.find('.author a, .username').first().text().trim();
-      const replies = el.find('.posts, dd.posts').first().text().replace(/[^0-9]/g, '') || '0';
-      const views = el.find('.views, dd.views').first().text().replace(/[^0-9]/g, '') || '0';
-      
-      let cleanUrl = link.startsWith('http') ? link : `${BASE_URL}/${link.replace('./', '')}`;
-      cleanUrl = cleanUrl.replace(/[?&]sid=[a-f0-9]{32}/, '');
-
-      threads.push({
-        id: threadId,
-        title,
-        link: cleanUrl,
-        author,
-        replies: parseInt(replies) || 0,
-        views: parseInt(views) || 0,
-        lastPost: '',
-        source: 'cs.rin.ru'
-      });
-    });
-
-    // Standard fallback path logic
+    // Fallback parse logic
     if (threads.length === 0) {
       $('a[href*="viewtopic"]').each((_, element) => {
          const el = $(element);
@@ -264,5 +311,6 @@ async function scrapeCsRinThread(threadId) {
 
 module.exports = {
   scrapeCsRin,
-  scrapeCsRinThread
+  scrapeCsRinThread,
+  scrapeCsRinFeed
 };
