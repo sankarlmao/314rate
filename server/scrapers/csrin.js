@@ -1,76 +1,95 @@
-const axios = require('axios');
 const cheerio = require('cheerio');
-const tough = require('tough-cookie');
-const { wrapper } = require('axios-cookiejar-support');
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const BASE_URL = 'https://cs.rin.ru/forum';
+// Hardcoded path for stable temporary cookie jar persistence across API lifetimes
+const cookieJarPath = path.join('/tmp', 'csrin_cookies.txt');
 
-// Common headers
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Connection': 'keep-alive'
-};
+/**
+ * Core Curl Wrapper acting as native system agent
+ */
+function nativeFetch(url) {
+  // Standardize parameters known to survive edge verification
+  const agent = 'Mozilla/5.0';
+  const cmd = `curl -s -L -H "User-Agent: ${agent}" -H "Accept-Language: en-US,en;q=0.9" -b "${cookieJarPath}" -c "${cookieJarPath}" --max-time 15 "${url}"`;
+  try {
+    return execSync(cmd).toString('utf8');
+  } catch (err) {
+    console.error(`[CURL ERROR] Failed fetching ${url}:`, err.message);
+    return "";
+  }
+}
 
-// Create a persistant cookie enabled axios client
-const jar = new tough.CookieJar();
-const client = wrapper(axios.create({
-  jar,
-  withCredentials: true,
-  headers: HEADERS,
-  timeout: 20000,
-  validateStatus: () => true // Never throw on non-200 so we can inspect body
-}));
-
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let securityPromise = null;
 
 /**
- * Solution for CS.RIN's custom javascript bot challenge
+ * Perform state-aware initialization and solve Javascript firewall challenge natively
  */
 function ensureSession() {
   if (securityPromise) return securityPromise;
 
   securityPromise = (async () => {
     try {
-      console.log('Initializing CSRIN session with security token...');
+      console.log('Performing bulletproof native validation sweep for CSRIN...');
       
-      // Step 1: Try to visit main index, which gives 401 and a challenge script
-      let response = await client.get(`${BASE_URL}/index.php`);
-      
-      if (response.status === 200 && response.data.includes('Board index')) {
-        console.log('CSRIN Session was already valid.');
-        return true;
+      // Wipe existing jar to force fresh fresh handshake for safety
+      if (fs.existsSync(cookieJarPath)) {
+         try { fs.unlinkSync(cookieJarPath); } catch(e) {}
       }
+      
+      // Create initial blank jar so the tool doesn't error
+      fs.writeFileSync(cookieJarPath, '');
 
-    // Step 2: Extract security tokens from JS inline text
-    const tokenMatch = response.data.match(/securitytoken=(.*?);/);
-    const expirationMatch = response.data.match(/securitytoken_expiration=(.*?);/);
-    
-    if (tokenMatch && expirationMatch) {
-      const token = tokenMatch[1];
-      const exp = expirationMatch[1];
+      // Phase 1: Collect anti-bot challenge
+      const rawBody = nativeFetch(`${BASE_URL}/index.php`);
       
-      // Manually place inside the CookieJar
-      await jar.setCookie(`securitytoken=${token}; Path=/; Secure`, 'https://cs.rin.ru');
-      await jar.setCookie(`securitytoken_expiration=${exp}; Path=/; Secure`, 'https://cs.rin.ru');
-      
-      // Step 3: Request the validation URI
-      console.log('Attempting security check authorization...');
-      await client.get('https://cs.rin.ru/securitycheck/forum/index.php');
-      
-      // Step 4: Verify access
-      const checkFinal = await client.get(`${BASE_URL}/index.php`);
-      if (checkFinal.status === 200) {
-        console.log('Successfully passed CSRIN security challenge.');
+      if (rawBody.includes('Board index')) {
+        console.log('Session immediately valid.');
         return true;
       }
-    }
+      
+      const tokenMatch = rawBody.match(/securitytoken=([^;"]+)/);
+      const expMatch = rawBody.match(/securitytoken_expiration=([^;"]+)/);
+      
+      if (!tokenMatch || !expMatch) {
+         console.warn('CSRIN critical failure: Anti-bot script not found or format changed.');
+         return false;
+      }
+      
+      const t = tokenMatch[1];
+      const e = expMatch[1];
+      
+      // Inject tokens directly into Netscape cookie structure required by cURL engine
+      const netscapeRow1 = `cs.rin.ru\tTRUE\t/\tTRUE\t${e}\tsecuritytoken\t${t}\n`;
+      const netscapeRow2 = `cs.rin.ru\tTRUE\t/\tTRUE\t${e}\tsecuritytoken_expiration\t${e}\n`;
+      
+      fs.appendFileSync(cookieJarPath, netscapeRow1);
+      fs.appendFileSync(cookieJarPath, netscapeRow2);
+      
+      // Phase 2: Trigger edge authorization ping
+      console.log('Activating security boundary gateway step...');
+      nativeFetch('https://cs.rin.ru/securitycheck/forum/index.php');
+      
+      // Phase 3: MANDATORY propagate sync period for Nginx cache commits
+      console.log('Holding thread for propagation commit (2.5s)...');
+      await sleep(2500);
+      
+      // Phase 4: Verify final admission
+      const verifiedBody = nativeFetch(`${BASE_URL}/index.php`);
+      
+      if (verifiedBody.includes('Board index')) {
+        console.log('BULLETPROOF AUTHENTICATION SUCCESSFUL: CS.RIN Session fully persistent.');
+        return true;
+      }
+      
+      console.warn('Authorization finalized without valid session bit.');
       return false;
     } catch (err) {
-      console.warn('CS.RIN session setup failed:', err.message);
-      securityPromise = null; // Allow retry on failure
+      console.error('Authentication runtime exception:', err.message);
+      securityPromise = null; // allow reset/retry logic
       return false;
     }
   })();
@@ -79,7 +98,7 @@ function ensureSession() {
 }
 
 /**
- * Sanitize HTML
+ * Standard clean pass on html elements
  */
 function sanitizeHtml($) {
   $('script, iframe, ins, noscript').remove();
@@ -88,47 +107,33 @@ function sanitizeHtml($) {
 }
 
 /**
- * Search cs.rin.ru
+ * Logic for list aggregation and processing via raw search execution
  */
 async function scrapeCsRin(query, page = 1) {
   await ensureSession();
   
-  // Locate a Session ID from current cookie jar or main page to pass directly
-  // (Search usually likes explicit sid in query param if possible)
-  const mainPage = await client.get(`${BASE_URL}/index.php`);
-  const sidMatch = mainPage.data.match(/sid=([a-f0-9]{32})/);
+  // Ensure full synchronization logic has established static state
+  const mainPage = nativeFetch(`${BASE_URL}/index.php`);
+  const sidMatch = mainPage.match(/sid=([a-f0-9]{32})/);
   const sid = sidMatch ? sidMatch[1] : '';
   
   try {
-    const response = await client.get(`${BASE_URL}/search.php`, {
-      params: {
-        keywords: query,
-        terms: 'all',
-        fid: [10],
-        sc: 1,
-        sf: 'titleonly',
-        sr: 'topics',
-        sk: 't',
-        sd: 'd',
-        st: 0,
-        ch: 300,
-        t: 0,
-        submit: 'Search',
-        start: (page - 1) * 25,
-        sid: sid
-      }
-    });
+    // Construct total search param buffer exactly replicating original schema
+    const startIdx = (page - 1) * 25;
+    const escapedQ = encodeURIComponent(query);
+    const searchUrl = `${BASE_URL}/search.php?keywords=${escapedQ}&terms=all&fid[]=10&sc=1&sf=titleonly&sr=topics&sk=t&sd=d&st=0&ch=300&t=0&submit=Search&start=${startIdx}&sid=${sid}`;
+    
+    const responseBody = nativeFetch(searchUrl);
 
-    if (response.status !== 200) {
-       console.log(`CSRIN search gave non-200: ${response.status}`);
+    if (!responseBody) {
+       throw new Error("Null buffer response detected during target fetch.");
     }
 
-    const $ = cheerio.load(response.data);
+    const $ = cheerio.load(responseBody);
     sanitizeHtml($);
 
     const threads = [];
 
-    // Generic PHPBB search rows
     $('li.row, tr.row1, tr.row2, .search.post').each((_, element) => {
       const el = $(element);
       const titleEl = el.find('a.topictitle, .topictitle a, a[href*="viewtopic"]').first();
@@ -145,9 +150,7 @@ async function scrapeCsRin(query, page = 1) {
       const replies = el.find('.posts, dd.posts').first().text().replace(/[^0-9]/g, '') || '0';
       const views = el.find('.views, dd.views').first().text().replace(/[^0-9]/g, '') || '0';
       
-      // Try standard clean link builders
       let cleanUrl = link.startsWith('http') ? link : `${BASE_URL}/${link.replace('./', '')}`;
-      // Strip SID from output links to keep it user-agnostic
       cleanUrl = cleanUrl.replace(/[?&]sid=[a-f0-9]{32}/, '');
 
       threads.push({
@@ -162,7 +165,7 @@ async function scrapeCsRin(query, page = 1) {
       });
     });
 
-    // Fallback parse
+    // Standard fallback path logic
     if (threads.length === 0) {
       $('a[href*="viewtopic"]').each((_, element) => {
          const el = $(element);
@@ -194,22 +197,24 @@ async function scrapeCsRin(query, page = 1) {
       source: 'cs.rin.ru'
     };
   } catch (err) {
-    console.error('CS.RIN Error:', err.message);
+    console.error('[CSRIN Scrape Error]:', err.message);
     return { threads: [], pagination: { currentPage: page }, source: 'cs.rin.ru', error: err.message };
   }
 }
 
 /**
- * Detail view
+ * Retrieves the payload details natively fetched from post identifier
  */
 async function scrapeCsRinThread(threadId) {
   await ensureSession();
 
   try {
     const url = `${BASE_URL}/viewtopic.php?t=${threadId}`;
-    const resp = await client.get(url);
+    const html = nativeFetch(url);
     
-    const $ = cheerio.load(resp.data);
+    if (!html) throw new Error("Failed to pull individual thread body response.");
+
+    const $ = cheerio.load(html);
     sanitizeHtml($);
 
     const title = $('h2 a, h2.topic-title').first().text().trim() || $('title').text().split('•')[0].trim();
@@ -219,7 +224,6 @@ async function scrapeCsRinThread(threadId) {
     const downloadLinks = [];
     const seen = new Set();
     
-    // Grab every URL potentially housing magnet/torrents
     firstPost.find('a[href]').each((_, el) => {
        const href = $(el).attr('href') || '';
        const txt = $(el).text().trim().toLowerCase();
@@ -253,6 +257,7 @@ async function scrapeCsRinThread(threadId) {
       source: 'cs.rin.ru'
     };
   } catch (err) {
+    console.error('[CSRIN Thread View Error]:', err.message);
     return { id: threadId, error: err.message, source: 'cs.rin.ru' };
   }
 }
