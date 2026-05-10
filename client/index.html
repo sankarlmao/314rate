@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="314rate — A personal game library aggregator with a clean, minimal interface.">
+  <title>314rate — Game Library</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏴‍☠️</text></svg>">
+</head>
+<body>
+  <!-- App Shell -->
+  <div id="app">
+    <!-- Header -->
+    <header id="header">
+      <div class="header-inner">
+        <div class="logo" id="logo-home">
+          <span class="logo-icon">⚓</span>
+          <span class="logo-text">314rate</span>
+        </div>
+        <div class="search-container">
+          <div class="search-box" id="search-box">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+            </svg>
+            <input type="text" id="search-input" placeholder="Search games..." autocomplete="off" spellcheck="false">
+            <div class="search-shortcut" id="search-shortcut">
+              <kbd>/</kbd>
+            </div>
+            <button class="search-clear hidden" id="search-clear" aria-label="Clear search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </div>
+        <nav class="header-nav">
+          <button class="nav-btn active" data-source="all" id="nav-all">All</button>
+          <button class="nav-btn" data-source="onlinefix" id="nav-onlinefix">Online-Fix</button>
+          <button class="nav-btn" data-source="csrin" id="nav-csrin">CS.RIN</button>
+          <button class="icon-btn" id="btn-refresh" aria-label="Refresh" title="Refresh data">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+          </button>
+        </nav>
+      </div>
+    </header>
+
+    <!-- Category Bar (for Online-Fix) -->
+    <div id="category-bar" class="category-bar">
+      <div class="category-scroll" id="category-scroll">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <main id="main-content">
+      <!-- Loading State -->
+      <div id="loading" class="loading-state">
+        <div class="loader">
+          <div class="loader-ring"></div>
+          <div class="loader-ring"></div>
+          <div class="loader-ring"></div>
+        </div>
+        <p class="loading-text">Fetching games...</p>
+      </div>
+
+      <!-- Error State -->
+      <div id="error-state" class="error-state hidden">
+        <div class="error-icon">⚠️</div>
+        <h3>Something went wrong</h3>
+        <p id="error-message">Could not fetch games. Check your connection.</p>
+        <button class="btn-primary" id="retry-btn">Try Again</button>
+      </div>
+
+      <!-- Empty State -->
+      <div id="empty-state" class="empty-state hidden">
+        <div class="empty-icon">🔍</div>
+        <h3>No games found</h3>
+        <p>Try a different search term or category.</p>
+      </div>
+
+      <!-- Games Grid -->
+      <div id="games-grid" class="games-grid hidden">
+        <!-- Game cards populated by JS -->
+      </div>
+
+      <!-- Pagination -->
+      <div id="pagination" class="pagination hidden">
+        <button class="btn-page" id="prev-page" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+          Previous
+        </button>
+        <span class="page-info" id="page-info">Page 1</span>
+        <button class="btn-page" id="next-page">
+          Next
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
+    </main>
+
+    <!-- Game Detail Modal -->
+    <div id="game-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-backdrop" id="modal-backdrop"></div>
+      <div class="modal-content">
+        <button class="modal-close" id="modal-close" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+        <div class="modal-body" id="modal-body">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Ad Sandbox (hidden iframe for containing potential ad content) -->
+    <iframe id="ad-sandbox" sandbox="allow-scripts" style="display:none;width:0;height:0;border:none;" title="Ad containment sandbox"></iframe>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
