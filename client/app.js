@@ -332,7 +332,14 @@ async function openGameDetail(id, source) {
   }
 }
 
+function getBestDownload(links) {
+  if (!links || !links.length) return null;
+  return links.find(l => l.type === 'magnet') || links.find(l => l.type === 'torrent') || links[0];
+}
+
 function renderOnlineFixDetail(game) {
+  const bestDl = getBestDownload(game.downloadLinks);
+  
   const dlHtml = game.downloadLinks?.length
     ? game.downloadLinks.map(dl => `
       <a href="${escHtml(dl.url)}" target="_blank" rel="noopener" class="download-link" onclick="event.stopPropagation()">
@@ -355,16 +362,28 @@ function renderOnlineFixDetail(game) {
       </div>
     </div>
     ${game.image ? `<div class="detail-image"><img src="${proxyImg(game.image)}" alt="${escHtml(game.title)}" onerror="this.parentElement.remove()"></div>` : ''}
+    
+    ${bestDl ? `
+      <div class="primary-action">
+         <a href="${escHtml(bestDl.url)}" target="_blank" rel="noopener" class="btn-mega-download">
+             <span class="mega-icon">${bestDl.type === 'magnet' ? '🧲' : '🚀'}</span>
+             <span class="mega-text">INSTANT DOWNLOAD</span>
+         </a>
+      </div>
+    ` : ''}
+
     ${game.description ? `<div class="detail-section"><h4>Description</h4><div class="detail-description">${escHtml(game.description)}</div></div>` : ''}
     <div class="detail-section">
-      <h4>Downloads (${game.downloadLinks?.length || 0})</h4>
+      <h4>All Links (${game.downloadLinks?.length || 0})</h4>
       <div class="download-list">${dlHtml}</div>
     </div>
-    ${game.systemRequirements ? `<div class="detail-section"><h4>System Requirements</h4><div class="detail-description">${escHtml(game.systemRequirements)}</div></div>` : ''}
+    ${game.systemRequirements ? `<div class="detail-section"><h4>Requirements</h4><div class="detail-description">${escHtml(game.systemRequirements)}</div></div>` : ''}
   `;
 }
 
 function renderCsRinDetail(thread) {
+  const bestDl = getBestDownload(thread.downloadLinks);
+
   const dlHtml = thread.downloadLinks?.length
     ? thread.downloadLinks.map(dl => `
       <a href="${escHtml(dl.url)}" target="_blank" rel="noopener" class="download-link" onclick="event.stopPropagation()">
@@ -386,9 +405,19 @@ function renderCsRinDetail(thread) {
         <a href="${escHtml(thread.link)}" target="_blank" rel="noopener">View thread ↗</a>
       </div>
     </div>
-    ${thread.content ? `<div class="detail-section"><h4>Thread Content</h4><div class="detail-description">${escHtml(thread.content)}</div></div>` : ''}
+
+    ${bestDl ? `
+      <div class="primary-action">
+         <a href="${escHtml(bestDl.url)}" target="_blank" rel="noopener" class="btn-mega-download">
+             <span class="mega-icon">${bestDl.type === 'magnet' ? '🧲' : '🚀'}</span>
+             <span class="mega-text">INSTANT DOWNLOAD</span>
+         </a>
+      </div>
+    ` : ''}
+
+    ${thread.content ? `<div class="detail-section"><h4>Thread Preview</h4><div class="detail-description">${escHtml(thread.content)}</div></div>` : ''}
     <div class="detail-section">
-      <h4>Downloads (${thread.downloadLinks?.length || 0})</h4>
+      <h4>Extracted Links (${thread.downloadLinks?.length || 0})</h4>
       <div class="download-list">${dlHtml}</div>
     </div>
     ${thread.error ? `<div class="detail-section"><p class="no-downloads">⚠️ ${escHtml(thread.error)}</p></div>` : ''}

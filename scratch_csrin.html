@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>CS RIN - Security check</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow" />
+<style>
+body {
+    text-align: center;
+    font-family: Verdana, Helvetica, Arial, sans-serif;
+    background-color: #000000;
+    color: #CCCCCC;
+}
+
+a {
+    color: #AAAAAA;
+}
+
+a:hover {
+    color: #FFFFFF;
+}
+</style>
+</head>
+<body>
+    <script nonce="343ad728d31e6a7a03f32c85af18780e">
+    window.onload = function() {
+        var s = document.createElement('p');
+        s.innerHTML = 'Security check, please wait..';
+        document.body.appendChild(s);
+
+        if (location.hostname !== "cs.rin.ru")
+        {
+            // Prevent Tor2web and other unauthorized reverse proxies
+            var p = document.createElement('p');
+            p.innerHTML = 'Unauthorized domain ' + location.hostname;
+            document.body.appendChild(p);
+            return;
+        }
+
+        // Set security token cookie and start cookie persistence check
+        var newURL = location.href;
+        document.cookie = "securitytoken=uRPNeeOB51dNWh4yKYvSoA; path=/; secure";
+        document.cookie = "securitytoken_expiration=1778502015; path=/; secure";
+		newURL = newURL.replace(location.pathname, "/securitycheck" + location.pathname);
+        location.replace(newURL);
+    };
+    </script>
+    <noscript>
+	    <h1>401 Unauthorized</h1>
+	    <p>Security check failed. Please enable Javascript to browse this page.</p><a href="/forum/search.php?keywords=Factorio&terms=all&fid%5B%5D=10&sc=1&sf=titleonly&sr=topics&sk=t&sd=d&st=0&ch=300&t=0&submit=Search">Reload page</a>
+    </noscript>
+</body>
+</html>

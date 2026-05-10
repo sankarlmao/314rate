@@ -18,7 +18,9 @@
     "node-cache": "^5.1.2"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "axios-cookiejar-support": "^7.0.0",
+    "concurrently": "^8.2.2",
+    "tough-cookie": "^6.0.1"
   },
   "engines": {
     "node": ">=18.0.0"

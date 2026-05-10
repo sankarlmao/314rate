@@ -32,6 +32,11 @@ html { scroll-behavior: smooth; }
 body {
   font-family: var(--font);
   background: var(--bg-primary);
+  background-image: 
+    radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+    radial-gradient(at 50% 0%, hsla(255,50%,15%,1) 0, transparent 50%), 
+    radial-gradient(at 100% 0%, hsla(339,49%,15%,1) 0, transparent 50%);
+  background-attachment: fixed;
   color: var(--text-primary);
   line-height: 1.6;
   min-height: 100vh;
@@ -355,6 +360,28 @@ img { max-width: 100%; display: block; }
   color: var(--text-secondary);
   max-height: 200px; overflow-y: auto;
 }
+/* Mega Download Button Premium Style */
+.primary-action {
+  margin: 24px 0;
+}
+.btn-mega-download {
+  display: flex; align-items: center; justify-content: center; gap: 16px;
+  width: 100%; padding: 18px; border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%);
+  box-shadow: 0 8px 32px rgba(108, 92, 231, 0.3);
+  color: #ffffff; text-decoration: none; font-weight: 800; letter-spacing: 1px;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  border: 2px solid rgba(255,255,255,0.1);
+}
+.btn-mega-download:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 15px 40px rgba(108, 92, 231, 0.5);
+  background: linear-gradient(135deg, #7f6ff0 0%, #00cec9 100%);
+}
+.btn-mega-download:active { transform: translateY(0) scale(0.98); }
+.mega-icon { font-size: 28px; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.2)); }
+.mega-text { font-size: 16px; text-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+
 .download-list { display: flex; flex-direction: column; gap: 8px; }
 .download-link {
   display: flex; align-items: center; gap: 10px;

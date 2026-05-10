@@ -1,5 +1,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
+const tough = require('tough-cookie');
+const { wrapper } = require('axios-cookiejar-support');
 
 const BASE_URL = 'https://cs.rin.ru/forum';
 
@@ -12,66 +14,97 @@ const HEADERS = {
   'Connection': 'keep-alive'
 };
 
-// Cookie jar for session management
-let sessionCookie = '';
+// Create a persistant cookie enabled axios client
+const jar = new tough.CookieJar();
+const client = wrapper(axios.create({
+  jar,
+  withCredentials: true,
+  headers: HEADERS,
+  timeout: 20000,
+  validateStatus: () => true // Never throw on non-200 so we can inspect body
+}));
+
+let securityPromise = null;
 
 /**
- * Login to cs.rin.ru (guest access or with credentials)
+ * Solution for CS.RIN's custom javascript bot challenge
  */
-async function ensureSession() {
-  if (sessionCookie) return;
+function ensureSession() {
+  if (securityPromise) return securityPromise;
 
-  try {
-    // Try to get a session by visiting the forum
-    const response = await axios.get(`${BASE_URL}/viewforum.php?f=10`, {
-      headers: HEADERS,
-      timeout: 15000,
-      maxRedirects: 5,
-      validateStatus: (status) => status < 500
-    });
+  securityPromise = (async () => {
+    try {
+      console.log('Initializing CSRIN session with security token...');
+      
+      // Step 1: Try to visit main index, which gives 401 and a challenge script
+      let response = await client.get(`${BASE_URL}/index.php`);
+      
+      if (response.status === 200 && response.data.includes('Board index')) {
+        console.log('CSRIN Session was already valid.');
+        return true;
+      }
 
-    // Extract session cookie
-    const cookies = response.headers['set-cookie'];
-    if (cookies) {
-      sessionCookie = cookies.map(c => c.split(';')[0]).join('; ');
+    // Step 2: Extract security tokens from JS inline text
+    const tokenMatch = response.data.match(/securitytoken=(.*?);/);
+    const expirationMatch = response.data.match(/securitytoken_expiration=(.*?);/);
+    
+    if (tokenMatch && expirationMatch) {
+      const token = tokenMatch[1];
+      const exp = expirationMatch[1];
+      
+      // Manually place inside the CookieJar
+      await jar.setCookie(`securitytoken=${token}; Path=/; Secure`, 'https://cs.rin.ru');
+      await jar.setCookie(`securitytoken_expiration=${exp}; Path=/; Secure`, 'https://cs.rin.ru');
+      
+      // Step 3: Request the validation URI
+      console.log('Attempting security check authorization...');
+      await client.get('https://cs.rin.ru/securitycheck/forum/index.php');
+      
+      // Step 4: Verify access
+      const checkFinal = await client.get(`${BASE_URL}/index.php`);
+      if (checkFinal.status === 200) {
+        console.log('Successfully passed CSRIN security challenge.');
+        return true;
+      }
     }
-  } catch (err) {
-    console.warn('CS.RIN session init failed:', err.message);
-  }
+      return false;
+    } catch (err) {
+      console.warn('CS.RIN session setup failed:', err.message);
+      securityPromise = null; // Allow retry on failure
+      return false;
+    }
+  })();
+  
+  return securityPromise;
 }
 
 /**
- * Sanitize HTML from cs.rin.ru
+ * Sanitize HTML
  */
 function sanitizeHtml($) {
-  $('script').remove();
-  $('iframe').remove();
-  $('ins').remove();
-  $('.adsbygoogle').remove();
-  $('[class*="banner"]').remove();
-  $('[class*="advert"]').remove();
-  $('noscript').remove();
+  $('script, iframe, ins, noscript').remove();
+  $('.adsbygoogle, [class*="banner"], [class*="advert"]').remove();
   return $;
 }
 
 /**
- * Search cs.rin.ru forum for game threads
- * Main game section is forum ID 10 (Main Forum for game releases)
+ * Search cs.rin.ru
  */
 async function scrapeCsRin(query, page = 1) {
   await ensureSession();
-
-  // cs.rin.ru uses phpBB search
-  // Forum 10 = "Main Forum" where game threads are posted
-  const searchUrl = `${BASE_URL}/search.php`;
+  
+  // Locate a Session ID from current cookie jar or main page to pass directly
+  // (Search usually likes explicit sid in query param if possible)
+  const mainPage = await client.get(`${BASE_URL}/index.php`);
+  const sidMatch = mainPage.data.match(/sid=([a-f0-9]{32})/);
+  const sid = sidMatch ? sidMatch[1] : '';
   
   try {
-    const response = await axios.get(searchUrl, {
+    const response = await client.get(`${BASE_URL}/search.php`, {
       params: {
         keywords: query,
         terms: 'all',
-        author: '',
-        fid: [10], // Main Forum
+        fid: [10],
         sc: 1,
         sf: 'titleonly',
         sr: 'topics',
@@ -81,173 +114,134 @@ async function scrapeCsRin(query, page = 1) {
         ch: 300,
         t: 0,
         submit: 'Search',
-        start: (page - 1) * 25
-      },
-      headers: {
-        ...HEADERS,
-        Cookie: sessionCookie
-      },
-      timeout: 15000,
-      maxRedirects: 5,
-      validateStatus: (status) => status < 500
+        start: (page - 1) * 25,
+        sid: sid
+      }
     });
+
+    if (response.status !== 200) {
+       console.log(`CSRIN search gave non-200: ${response.status}`);
+    }
 
     const $ = cheerio.load(response.data);
     sanitizeHtml($);
 
     const threads = [];
 
-    // Parse search results - phpBB format
-    $('li.row, .topiclist .row, tr.row1, tr.row2, .search-results .row').each((_, element) => {
+    // Generic PHPBB search rows
+    $('li.row, tr.row1, tr.row2, .search.post').each((_, element) => {
       const el = $(element);
-      
       const titleEl = el.find('a.topictitle, .topictitle a, a[href*="viewtopic"]').first();
       const title = titleEl.text().trim();
       const link = titleEl.attr('href') || '';
       
       if (!title || !link) return;
 
-      // Extract thread ID
       const tidMatch = link.match(/[?&]t=(\d+)/);
       const threadId = tidMatch ? tidMatch[1] : '';
+      if (!threadId) return;
 
-      // Extract author
-      const author = el.find('.author a, .username, .responsive-show a').first().text().trim();
-
-      // Extract reply count
-      const replies = el.find('.posts, dd.posts').text().trim();
-
-      // Extract views
-      const views = el.find('.views, dd.views').text().trim();
-
-      // Extract last post date
-      const lastPost = el.find('.lastpost time, .lastpost .responsive-show').first().text().trim();
-
-      const fullLink = link.startsWith('http') ? link : `${BASE_URL}/${link.replace('./', '')}`;
+      const author = el.find('.author a, .username').first().text().trim();
+      const replies = el.find('.posts, dd.posts').first().text().replace(/[^0-9]/g, '') || '0';
+      const views = el.find('.views, dd.views').first().text().replace(/[^0-9]/g, '') || '0';
+      
+      // Try standard clean link builders
+      let cleanUrl = link.startsWith('http') ? link : `${BASE_URL}/${link.replace('./', '')}`;
+      // Strip SID from output links to keep it user-agnostic
+      cleanUrl = cleanUrl.replace(/[?&]sid=[a-f0-9]{32}/, '');
 
       threads.push({
         id: threadId,
         title,
-        link: fullLink,
+        link: cleanUrl,
         author,
         replies: parseInt(replies) || 0,
-        views: parseInt(views.replace(/,/g, '')) || 0,
-        lastPost,
+        views: parseInt(views) || 0,
+        lastPost: '',
         source: 'cs.rin.ru'
       });
     });
 
-    // Alternative parsing for different phpBB layouts
+    // Fallback parse
     if (threads.length === 0) {
       $('a[href*="viewtopic"]').each((_, element) => {
-        const el = $(element);
-        const title = el.text().trim();
-        const link = el.attr('href') || '';
-        
-        if (!title || title.length < 3) return;
-        if (title.toLowerCase().includes('re:')) return; // Skip reply links
+         const el = $(element);
+         const title = el.text().trim();
+         const link = el.attr('href') || '';
+         if (title.length < 4 || title.toLowerCase().startsWith('re:')) return;
+         
+         const tidMatch = link.match(/[?&]t=(\d+)/);
+         const threadId = tidMatch ? tidMatch[1] : '';
+         if (!threadId || threads.find(t => t.id === threadId)) return;
+         
+         let cleanUrl = link.startsWith('http') ? link : `${BASE_URL}/${link.replace('./', '')}`;
+         cleanUrl = cleanUrl.replace(/[?&]sid=[a-f0-9]{32}/, '');
 
-        const tidMatch = link.match(/[?&]t=(\d+)/);
-        const threadId = tidMatch ? tidMatch[1] : '';
-        if (!threadId) return;
-
-        // Avoid duplicates
-        if (threads.find(t => t.id === threadId)) return;
-
-        const fullLink = link.startsWith('http') ? link : `${BASE_URL}/${link.replace('./', '')}`;
-
-        threads.push({
-          id: threadId,
-          title,
-          link: fullLink,
-          author: '',
-          replies: 0,
-          views: 0,
-          lastPost: '',
-          source: 'cs.rin.ru'
-        });
+         threads.push({
+           id: threadId, title, link: cleanUrl, source: 'cs.rin.ru', replies: 0, views: 0
+         });
       });
     }
 
     return {
-      threads,
+      threads: threads.slice(0, 40),
       query,
       pagination: {
         currentPage: page,
-        hasNext: threads.length >= 25,
+        hasNext: threads.length >= 20,
         hasPrev: page > 1
       },
       source: 'cs.rin.ru'
     };
   } catch (err) {
-    console.error('CS.RIN search failed:', err.message);
-    // Return empty results instead of throwing
-    return {
-      threads: [],
-      query,
-      pagination: { currentPage: page, hasNext: false, hasPrev: false },
-      source: 'cs.rin.ru',
-      error: 'Forum may require authentication or is temporarily unavailable'
-    };
+    console.error('CS.RIN Error:', err.message);
+    return { threads: [], pagination: { currentPage: page }, source: 'cs.rin.ru', error: err.message };
   }
 }
 
 /**
- * Scrape a specific thread from cs.rin.ru
+ * Detail view
  */
 async function scrapeCsRinThread(threadId) {
   await ensureSession();
 
   try {
     const url = `${BASE_URL}/viewtopic.php?t=${threadId}`;
+    const resp = await client.get(url);
     
-    const response = await axios.get(url, {
-      headers: {
-        ...HEADERS,
-        Cookie: sessionCookie
-      },
-      timeout: 15000,
-      maxRedirects: 5,
-      validateStatus: (status) => status < 500
-    });
-
-    const $ = cheerio.load(response.data);
+    const $ = cheerio.load(resp.data);
     sanitizeHtml($);
 
-    const title = $('h2 a, h2, .topic-title').first().text().trim();
-
-    // Extract first post content (usually has download links)
-    const firstPost = $('.post .content, .postbody .content, .post_text').first();
+    const title = $('h2 a, h2.topic-title').first().text().trim() || $('title').text().split('•')[0].trim();
+    const firstPost = $('.postbody .content, .post .content').first();
     const content = firstPost.text().trim().substring(0, 3000);
 
-    // Extract all download links from the thread
     const downloadLinks = [];
+    const seen = new Set();
+    
+    // Grab every URL potentially housing magnet/torrents
     firstPost.find('a[href]').each((_, el) => {
-      const href = $(el).attr('href') || '';
-      const text = $(el).text().trim();
-
-      if (href.includes('mega.') || href.includes('1fichier') ||
-          href.includes('zippyshare') || href.includes('drive.google') ||
-          href.includes('mediafire') || href.includes('pixeldrain') ||
-          href.includes('gofile') || href.includes('buzzheavier') ||
-          href.includes('filecrypt') || href.includes('.torrent') ||
-          href.includes('magnet:') || href.includes('disk.yandex') ||
-          href.includes('uploadhaven') || href.includes('datanodes')) {
-        downloadLinks.push({
-          url: href,
-          text: text || 'Download',
-          type: href.includes('magnet:') ? 'magnet' : href.includes('.torrent') ? 'torrent' : 'direct'
-        });
-      }
-    });
-
-    // Extract images
-    const images = [];
-    firstPost.find('img[src]').each((_, el) => {
-      const src = $(el).attr('src') || '';
-      if (src && !src.includes('smilies') && !src.includes('avatar') && !src.includes('icon')) {
-        images.push(src.startsWith('http') ? src : `${BASE_URL}/${src}`);
-      }
+       const href = $(el).attr('href') || '';
+       const txt = $(el).text().trim().toLowerCase();
+       
+       if (!href || seen.has(href)) return;
+       
+       const isDl = href.includes('mega.') || href.includes('drive.google') || href.includes('mediafire') || 
+                    href.includes('pixeldrain') || href.includes('1fichier') || href.includes('gofile') ||
+                    href.includes('magnet:') || href.includes('.torrent') || href.includes('crack');
+                    
+       if (isDl || txt.includes('download') || txt.includes('скачать')) {
+          seen.add(href);
+          let type = 'direct';
+          if (href.includes('magnet:')) type = 'magnet';
+          else if (href.includes('.torrent')) type = 'torrent';
+          
+          downloadLinks.push({
+             url: href,
+             text: $(el).text().trim() || 'Download',
+             type
+          });
+       }
     });
 
     return {
@@ -256,21 +250,10 @@ async function scrapeCsRinThread(threadId) {
       link: url,
       content,
       downloadLinks,
-      images: images.slice(0, 10),
       source: 'cs.rin.ru'
     };
   } catch (err) {
-    console.error('CS.RIN thread fetch failed:', err.message);
-    return {
-      id: threadId,
-      title: 'Thread unavailable',
-      link: `${BASE_URL}/viewtopic.php?t=${threadId}`,
-      content: '',
-      downloadLinks: [],
-      images: [],
-      source: 'cs.rin.ru',
-      error: 'Thread may require authentication or is temporarily unavailable'
-    };
+    return { id: threadId, error: err.message, source: 'cs.rin.ru' };
   }
 }
 

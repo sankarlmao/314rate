@@ -36,6 +36,42 @@ const CATEGORIES = {
 };
 
 /**
+ * Resolves an intermediate /ext/ link from Online-Fix to its true destination (no ads!)
+ */
+async function resolveExtLink(url) {
+  if (!url || !url.includes('/ext/')) return url;
+  
+  try {
+    const resp = await axios.get(url, {
+      headers: { ...HEADERS, 'Referer': BASE_URL },
+      timeout: 8000,
+      responseType: 'arraybuffer' // to allow win1251 decoding
+    });
+    
+    const html = iconv.decode(Buffer.from(resp.data), 'win1251');
+    
+    // Check for location.href injection commonly used in their intermediate template
+    // Regex enhanced to account for escaped quotes like \\' used within innerHTML
+    const jsMatch = html.match(/location\.href\s*=\s*\\*['"](.*?)\\*['"]/i);
+    if (jsMatch && jsMatch[1]) {
+       return jsMatch[1];
+    }
+    
+    // Fallback to direct meta refresh if present
+    const metaMatch = html.match(/content=['"]\d+;\s*url=(.*?)['"]/i);
+    if (metaMatch && metaMatch[1]) {
+       return metaMatch[1];
+    }
+    
+    // Final fallback if no js redirect found, return original so user can still click manually
+    return url; 
+  } catch (e) {
+    console.warn(`Could not resolve link ${url}: ${e.message}`);
+    return url;
+  }
+}
+
+/**
  * Strip ads and tracking elements from HTML
  */
 function sanitizeHtml($) {
@@ -274,58 +310,107 @@ async function scrapeOnlineFixDetail(gameId) {
   sanitizeHtml($);
 
   // Extract game details
-  const title = $('h1').first().text().trim() || $('h2.title').first().text().trim();
+  const title = $('#news-title').text().trim() || $('h1').first().text().trim() || $('meta[property="og:title"]').attr('content') || $('h2.title').first().text().trim();
   
-  // Get the main image (lazy-loaded)
-  let image = $('article img.lazyload, article img[data-src], .article img.lazyload').first().attr('data-src') || 
-              $('article img, .article img').first().attr('src') || '';
+  // Get the main image
+  let image = $('meta[property="og:image"]').attr('content') || '';
+  
+  // Fallback to poster in sidebar or related that matches current article
+  if (!image || image.includes('youtube')) {
+     const posterEl = $('img[data-src*="poster.jpg"], img[src*="poster.jpg"]').first();
+     const posterSrc = posterEl.attr('data-src') || posterEl.attr('src') || '';
+     if (posterSrc) image = posterSrc;
+  }
   if (image && !image.startsWith('http')) {
     image = `${BASE_URL}${image}`;
   }
 
-  // Extract download links (filter out ad links)
+  // Locate main container
+  const mainContent = $('.full-story-content, .full-text, article .preview-text, .article-content').first();
+
+  // Extract download links
   const downloadLinks = [];
   const seenUrls = new Set();
-  $('a[href]').each((_, el) => {
-    const href = $(el).attr('href') || '';
-    const text = $(el).text().trim();
+  
+  // Also check inside the main content for all links
+  const linkSelectors = 'a[href*="/ext/"], a[href*="/engine/download.php"], a.btn-success, a[href*="magnet:"], a[href*=".torrent"]';
+  
+  $(linkSelectors).each((_, el) => {
+    const $el = $(el);
+    const href = $el.attr('href') || '';
+    let text = $el.text().trim().replace(/\s+/g, ' ');
     
-    if (seenUrls.has(href)) return;
+    if (!href || seenUrls.has(href)) return;
     
-    if (href.includes('magnet:') || href.includes('.torrent') ||
-        href.includes('mega.') || href.includes('1fichier') ||
-        href.includes('drive.google') || href.includes('mediafire') ||
-        href.includes('pixeldrain') || href.includes('gofile') ||
-        href.includes('buzzheavier') || href.includes('filecrypt') ||
-        href.includes('disk.yandex') || href.includes('uploadhaven') ||
-        href.includes('datanodes')) {
-      seenUrls.add(href);
-      downloadLinks.push({
-        url: href,
-        text: text || 'Download',
-        type: href.includes('magnet:') ? 'magnet' : href.includes('.torrent') ? 'torrent' : 'direct'
-      });
+    // Clean up Russian common phrases and text
+    const isExt = href.includes('/ext/');
+    const isEngine = href.includes('/engine/download.php');
+    const lowerText = text.toLowerCase();
+    
+    // Filter out non-download links like Discord/Steam
+    if (isExt) {
+       const titleAttr = $el.attr('title') || '';
+       if (titleAttr.includes('steam') || titleAttr.includes('discord') || titleAttr.includes('vk.com') || titleAttr.includes('dayzavr')) {
+         return; // Not a download link
+       }
+       // Text must mention "Скачать" (Download) or contain direct links
+       if (!lowerText.includes('скачать') && !lowerText.includes('download') && !$el.hasClass('btn')) {
+         return; 
+       }
     }
+
+    // Add to results
+    seenUrls.add(href);
+    
+    let type = 'direct';
+    if (href.includes('magnet:') || lowerText.includes('магнет') || lowerText.includes('magnet')) type = 'magnet';
+    else if (href.includes('.torrent') || lowerText.includes('торрент') || lowerText.includes('torrent')) type = 'torrent';
+    
+    downloadLinks.push({
+      url: href,
+      text: text || 'Download',
+      type: type
+    });
   });
 
-  // Extract description from preview-text or full content
-  const contentEl = $('article .preview-text, .article-content .preview-text, .full-text').first();
-  const description = contentEl.length ? contentEl.text().trim().substring(0, 2000) : '';
+  // Clean description: Get HTML, remove script/style tags, convert basics
+  const contentEl = mainContent;
+  let description = '';
+  
+  if (contentEl.length) {
+    // Clone and strip spoilers/large tables to leave text
+    const cleanContent = contentEl.clone();
+    cleanContent.find('.text_spoiler, script, style').remove();
+    description = cleanContent.text().trim().substring(0, 2000).replace(/\s+/g, ' ');
+  }
+
+  // Extract system requirements
+  const bodyText = $('body').text();
+  const sysReqMatch = bodyText.match(/(Минимальные|Системные требования|Minimum|System Requirements)[\s\S]{0,1000}/i);
+  const systemRequirements = sysReqMatch ? sysReqMatch[0].split(/\n\n|\r\n\r\n/)[0].substring(0, 600) : '';
 
   // Extract screenshots
   const screenshots = [];
-  $('article img[data-src], article img[src], .article img[data-src]').each((_, el) => {
+  mainContent.find('img[data-src], img[src]').each((_, el) => {
     let src = $(el).attr('data-src') || $(el).attr('src') || '';
-    if (src && !src.includes('banner') && !src.includes('advert') && !src.includes('icon') && !src.includes('logo')) {
+    if (src && !src.includes('dleimages') && !src.includes('icon') && !src.includes('logo')) {
       if (!src.startsWith('http')) src = `${BASE_URL}${src}`;
       if (!screenshots.includes(src)) screenshots.push(src);
     }
   });
 
-  // Extract system requirements if present
-  const bodyText = $('body').text();
-  const sysReqMatch = bodyText.match(/(Минимальные|Minimum|System Requirements)[\s\S]{0,1000}/i);
-  const systemRequirements = sysReqMatch ? sysReqMatch[0].substring(0, 500) : '';
+  // Automatically resolve redirects on the fly for ALL extracted download links
+  // This gives direct links right back to our clean aggregated UI!
+  if (downloadLinks.length > 0) {
+    try {
+      await Promise.all(downloadLinks.map(async (dl) => {
+        if (dl.url && dl.url.includes('/ext/')) {
+           const directUrl = await resolveExtLink(dl.url);
+           if (directUrl) dl.url = directUrl;
+        }
+      }));
+    } catch(e) { console.warn("Resolver failed partly:", e.message); }
+  }
 
   return {
     id: gameId,
