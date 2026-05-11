@@ -13,10 +13,16 @@ const cookieJarPath = path.join('/tmp', 'csrin_cookies.txt');
 function nativeFetch(url) {
   // Standardize parameters known to survive edge verification
   const agent = 'Mozilla/5.0';
-  const cmd = `curl -s -L -H "User-Agent: ${agent}" -H "Accept-Language: en-US,en;q=0.9" -b "${cookieJarPath}" -c "${cookieJarPath}" --max-time 15 "${url}"`;
+  // Added '-k' to ignore untrusted local certs introduced by Fortinet/Firewalls
+  const cmd = `curl -s -k -L -H "User-Agent: ${agent}" -H "Accept-Language: en-US,en;q=0.9" -b "${cookieJarPath}" -c "${cookieJarPath}" --max-time 15 "${url}"`;
   try {
-    return execSync(cmd).toString('utf8');
+    const res = execSync(cmd).toString('utf8');
+    if (res.includes('FortiGuard') || res.includes('Fortinet')) {
+       throw new Error("NETWORK_BLOCK_BY_FIREWALL");
+    }
+    return res;
   } catch (err) {
+    if (err.message === "NETWORK_BLOCK_BY_FIREWALL") throw err;
     console.error(`[CURL ERROR] Failed fetching ${url}:`, err.message);
     return "";
   }

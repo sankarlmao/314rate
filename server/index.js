@@ -1,4 +1,7 @@
 const express = require('express');
+// Bypass system enterprise SSL interception gateway blocks 
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 const cors = require('cors');
 const path = require('path');
 const axios = require('axios');

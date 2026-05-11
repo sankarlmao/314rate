@@ -138,11 +138,19 @@ async function scrapeOnlineFix(page = 1, category = '', searchQuery = '') {
     headers: HEADERS, 
     timeout: 15000,
     maxRedirects: 3,
+    validateStatus: () => true, // We want to catch block page content manually
     responseType: 'arraybuffer'
   });
 
+  const buf = Buffer.from(response.data);
+  const isBlocked = buf.toString().includes('FortiGuard') || buf.toString().includes('Fortinet');
+  
+  if (isBlocked) {
+     throw new Error("SYSTEM FIREWALL BLOCK DETECTED (FortiGuard) - Activate VPN to proceed.");
+  }
+
   // Decode windows-1251 to utf-8
-  const html = iconv.decode(Buffer.from(response.data), 'win1251');
+  const html = iconv.decode(buf, 'win1251');
   const $ = cheerio.load(html);
   sanitizeHtml($);
 

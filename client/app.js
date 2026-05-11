@@ -209,24 +209,33 @@ async function fetchGames() {
         state.games = [...ofGames, ...csGames];
         renderGames(state.games, null);
       }
-    } else if (state.source === 'csrin') {
-      // CS.RIN needs a search query
-      state.games = [];
-      showEmpty('Enter a game name to search CS.RIN.RU forum');
     } else {
-      // Online-fix listing — always fetch from main listing, filter category client-side
-      const res = await fetch(`${API_BASE}/onlinefix/games?page=${state.page}`);
-      data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to fetch');
-      let games = data.games || [];
-      
-      // Client-side category filter
-      if (state.category && state.category !== 'all') {
-        games = games.filter(g => g.category === state.category);
+      // Listing mode (Home feeds)
+      if (state.source === 'onlinefix') {
+        const res = await fetch(`${API_BASE}/onlinefix/games?page=${state.page}`);
+        data = await res.json();
+        let games = data.games || [];
+        if (state.category && state.category !== 'all') games = games.filter(g => g.category === state.category);
+        state.games = games;
+        renderGames(state.games, data.pagination);
+      } else if (state.source === 'csrin') {
+        const res = await fetch(`${API_BASE}/csrin/games?page=${state.page}`);
+        data = await res.json();
+        state.games = (data.threads || []).map(threadToGame);
+        renderGames(state.games, data.pagination);
+      } else {
+        // Combined source logic: Fetch front pages of both
+        const [ofRes, csRes] = await Promise.all([
+          fetch(`${API_BASE}/onlinefix/games?page=${state.page}`).then(r => r.json()).catch(() => ({ games: [] })),
+          fetch(`${API_BASE}/csrin/games?page=${state.page}`).then(r => r.json()).catch(() => ({ threads: [] }))
+        ]);
+        
+        const ofGames = ofRes.games || [];
+        const csGames = (csRes.threads || []).map(threadToGame);
+        // Interleave them or join them
+        state.games = [...ofGames, ...csGames].sort((a,b) => 0.5 - Math.random()); // Shuffle combined view slightly to mix sources
+        renderGames(state.games, null);
       }
-      
-      state.games = games;
-      renderGames(state.games, data.pagination);
     }
   } catch (err) {
     showError(err.message);
@@ -342,16 +351,21 @@ async function openGameDetail(id, source) {
           <div style="text-transform:uppercase; font-size:13px;">TRANSFERRING COMMAND TO SYSTEM...</div>
         </div>`;
         
-      // Trigger immediate location jump!
+      // Dispatch logical navigation protocol
       setTimeout(() => {
-         window.location.href = bestDl.url;
-      }, 500);
+         // Magnet schemas are fired via direct assign to prevent empty blip tabs.
+         // HTTP directs are fired in blank tabs to maintain application state context.
+         if (bestDl.url.startsWith('magnet:')) {
+           window.location.assign(bestDl.url);
+         } else {
+           window.open(bestDl.url, '_blank');
+         }
+      }, 200);
       
-      // After a short delay, update the modal state to standard content just in case they want other details
       setTimeout(() => {
          if (source === 'cs.rin.ru') renderCsRinDetail(data);
          else renderOnlineFixDetail(data);
-      }, 2000);
+      }, 1500);
     } else {
       // No download found instantly? Fallback directly to detail render!
       if (source === 'cs.rin.ru') renderCsRinDetail(data);
